@@ -67,7 +67,7 @@ impl<H: AxVCpuHal> axvcpu::AxArchVCpu for LoongArchVCpu<H> {
     }
 
     fn set_entry(&mut self, entry: GuestPhysAddr) -> AxResult {
-        self.regs.guest_regs.epc = entry.as_usize(); // LoongArch 使用 EPC
+        self.regs.guest_regs.era = entry.as_usize(); // LoongArch 使用 ERA 作为异常返回地址
         Ok(())
     }
 
@@ -115,7 +115,7 @@ impl<H: AxVCpuHal> LoongArchVCpu<H> {
     }
 
     pub fn advance_pc(&mut self, instr_len: usize) {
-        self.regs.guest_regs.epc += instr_len;
+        self.regs.guest_regs.era += instr_len;
     }
 
     pub fn regs(&mut self) -> &mut VmCpuRegisters {
@@ -168,27 +168,27 @@ impl<H: AxVCpuHal> LoongArchVCpu<H> {
 
 // LoongArch 特有的汇编入口
 unsafe extern "C" fn _run_guest_loongarch(state: *mut VmCpuRegisters) {
-    core::arch::asm!(
-        // 保存 host 状态
-        "csrwr {save3}, {LOONGARCH_CSR_SAVE3}",
-        "csrwr {save4}, {LOONGARCH_CSR_SAVE4}",
-        // 加载 guest 状态
-        "ld.d $r4, {state_ptr}, 0",  // 加载 EPC
-        "csrwr $r4, era",
-        "ld.d $r4, {state_ptr}, 8",  // 加载 hgatp
-        "csrwr $r4, hgatp",
-        // 进入 guest 执行
-        "ertn",
-        // 退出时恢复 host 状态
-        "ld.d $r4, {state_ptr}, 8",  // 恢复 hgatp
-        "csrwr $r4, hgatp",
-        LOONGARCH_CSR_SAVE3 = const 0x33,
-        LOONGARCH_CSR_SAVE4 = const 0x34,
-        save3 = in(reg) (state as usize + core::mem::size_of::<VmCpuRegisters>()),
-        save4 = in(reg) (*state).stack_top,
-        state_ptr = in(reg) state,
-        options(noreturn)
-    );
+    unsafe {
+        core::arch::asm!(
+            // 保存 host 状态
+            "csrwr {save3}, {LOONGARCH_CSR_SAVE3}",
+            // 加载 guest 状态
+            "ld.d $r4, {state_ptr}, 0",  // 加载 era
+            "csrwr $r4, {era}", //#define LOONGARCH_CSR_ERA		0x6	/* ERA */
+            "ld.d $r4, {state_ptr}, 8",  // 加载 pgd (LoongArch的页表基址寄存器)
+            "csrwr $r4, 0x1b",  // PGD CSR编号 (LOONGARCH_CSR_PGD)
+            // 进入 guest 执行
+            "ertn",
+            // 退出时恢复 host 状态
+            "ld.d $r4, {state_ptr}, 8",  // 恢复 pgd
+            "csrwr $r4, 0x1b",  // PGD CSR编号 (LOONGARCH_CSR_PGD)
+            era = const 0x6,
+            LOONGARCH_CSR_SAVE3 = const 0x33,
+            save3 = in(reg) (state as usize + core::mem::size_of::<VmCpuRegisters>()),
+            state_ptr = in(reg) state,
+            options(noreturn)
+        );
+    }
 }
 
 impl<H: AxVCpuHal> LoongArchVCpu<H> {
@@ -202,7 +202,7 @@ impl<H: AxVCpuHal> LoongArchVCpu<H> {
 
     fn handle_ipi(&mut self) -> AxResult<AxVCpuExitReason> {
         // 处理核间中断
-        Ok(AxVCpuExitReason::Interrupt { vector: 0 })
+        Ok(AxVCpuExitReason::Nothing)  // LoongArch使用Nothing代替Interrupt
     }
 
     fn flush_tlb(&mut self) {

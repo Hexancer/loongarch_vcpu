@@ -39,13 +39,25 @@ impl Crmd {
 
     pub fn clear_ie() {
         unsafe {
-            asm!("csrclr 0x1, 0x4");
+            let mut crmd: usize;
+            // Read the CRMD register
+            asm!("csrrd {0}, 0x4", out(reg) crmd);
+            // Clear the IE bit (bit 2)
+            crmd &= !(1 << 2);
+            // Write the updated value back to CRMD
+            asm!("csrwr {0}, 0x4", in(reg) crmd);
         }
     }
-
+    
     pub fn set_ie() {
         unsafe {
-            asm!("csrset 0x1, 0x4");
+            let mut crmd: usize;
+            // Read the CRMD register
+            asm!("csrrd {0}, 0x4", out(reg) crmd);
+            // Set the IE bit (bit 2)
+            crmd |= 1 << 2;
+            // Write the updated value back to CRMD
+            asm!("csrwr {0}, 0x4", in(reg) crmd);
         }
     }
 }

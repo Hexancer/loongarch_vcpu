@@ -9,74 +9,6 @@ warning: unused imports: `Trap` and `ecfg::Ecfg`
   |
   = note: `#[warn(unused_imports)]` on by default
 
-error[E0609]: no field `era` on type `regs::GuestCpuState`
-  --> src/vcpu.rs:63:30
-   |
-63 |         self.regs.guest_regs.era = 0;  // 异常返回地址
-   |                              ^^^ unknown field
-   |
-   = note: available fields are: `gprs`, `sstatus`, `hstatus`, `scounteren`, `sepc`
-
-error[E0609]: no field `epc` on type `regs::GuestCpuState`
-  --> src/vcpu.rs:70:30
-   |
-70 |         self.regs.guest_regs.epc = entry.as_usize(); // LoongArch 使用 EPC
-   |                              ^^^ unknown field
-   |
-help: a field with a similar name exists
-   |
-70 |         self.regs.guest_regs.sepc = entry.as_usize(); // LoongArch 使用 EPC
-   |                              ~~~~
-
-error[E0609]: no field `epc` on type `regs::GuestCpuState`
-   --> src/vcpu.rs:118:30
-    |
-118 |         self.regs.guest_regs.epc += instr_len;
-    |                              ^^^ unknown field
-    |
-help: a field with a similar name exists
-    |
-118 |         self.regs.guest_regs.sepc += instr_len;
-    |                              ~~~~
-
-error[E0609]: no field `estat` on type `VmCpuTrapState`
-   --> src/vcpu.rs:126:41
-    |
-126 |         let estat = self.regs.trap_csrs.estat;
-    |                                         ^^^^^ unknown field
-    |
-    = note: available fields are: `scause`, `stval`, `htval`, `htinst`
-
-error[E0609]: no field `era` on type `regs::GuestCpuState`
-   --> src/vcpu.rs:129:40
-    |
-129 |         let era = self.regs.guest_regs.era;
-    |                                        ^^^ unknown field
-    |
-    = note: available fields are: `gprs`, `sstatus`, `hstatus`, `scounteren`, `sepc`
-
-error[E0609]: no field `badv` on type `VmCpuTrapState`
-   --> src/vcpu.rs:153:48
-    |
-153 |                 let badv = self.regs.trap_csrs.badv;
-    |                                                ^^^^ unknown field
-    |
-    = note: available fields are: `scause`, `stval`, `htval`, `htinst`
-
-error[E0609]: no field `stack_top` on type `regs::VmCpuRegisters`
-   --> src/vcpu.rs:188:34
-    |
-188 |         save4 = in(reg) (*state).stack_top,
-    |                                  ^^^^^^^^^ unknown field
-    |
-    = note: available fields are: `hyp_regs`, `guest_regs`, `vs_csrs`, `virtual_hs_csrs`, `trap_csrs`
-
-error[E0599]: no variant named `Interrupt` found for enum `AxVCpuExitReason`
-   --> src/vcpu.rs:205:30
-    |
-205 |         Ok(AxVCpuExitReason::Interrupt { vector: 0 })
-    |                              ^^^^^^^^^ variant not found in `AxVCpuExitReason`
-
 warning[E0133]: use of inline assembly is unsafe and requires unsafe block
   --> src/detect.rs:45:5
    |
@@ -118,7 +50,113 @@ note: an unsafe function restricts its caller, but its body is safe by default
 58 | unsafe fn restore_detect_trap(ie: bool, eentry: Eentry, tp: usize) -> usize {
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Some errors have detailed explanations: E0133, E0599, E0609.
-For more information about an error, try `rustc --explain E0133`.
-warning: `loongarch_vcpu` (lib) generated 3 warnings
-error: could not compile `loongarch_vcpu` (lib) due to 8 previous errors; 3 warnings emitted
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+   --> src/vcpu.rs:171:5
+    |
+171 | /     core::arch::asm!(
+172 | |         // 保存 host 状态
+173 | |         "csrwr {save3}, {LOONGARCH_CSR_SAVE3}",
+...   |
+187 | |         options(noreturn)
+188 | |     );
+    | |_____^ use of inline assembly
+    |
+    = note: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+    = note: inline assembly is entirely unchecked and can cause undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+   --> src/vcpu.rs:170:1
+    |
+170 | unsafe extern "C" fn _run_guest_loongarch(state: *mut VmCpuRegisters) {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `rust_detect_trap` is never used
+  --> src/detect.rs:26:15
+   |
+26 | extern "C" fn rust_detect_trap(trap_frame: &mut TrapFrame) {
+   |               ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: struct `TrapFrame` is never constructed
+  --> src/detect.rs:76:8
+   |
+76 | struct TrapFrame {
+   |        ^^^^^^^^^
+
+warning: methods `handle_timer_interrupt`, `handle_ipi`, and `flush_tlb` are never used
+   --> src/vcpu.rs:192:8
+    |
+191 | impl<H: AxVCpuHal> LoongArchVCpu<H> {
+    | ----------------------------------- methods in this implementation
+192 |     fn handle_timer_interrupt(&mut self) -> AxResult<AxVCpuExitReason> {
+    |        ^^^^^^^^^^^^^^^^^^^^^^
+...
+200 |     fn handle_ipi(&mut self) -> AxResult<AxVCpuExitReason> {
+    |        ^^^^^^^^^^
+...
+205 |     fn flush_tlb(&mut self) {
+    |        ^^^^^^^^^
+
+error: immediate must be an integer in the range [0, 16383]
+  --> src/percpu.rs:48:14
+   |
+48 |             "csrwr $r4, ecfg",
+   |              ^^^^^^^^^^^^^^^
+   |
+note: instantiated into assembly here
+  --> <inline asm>:2:12
+   |
+2  | csrwr $r4, ecfg
+   |            ^
+
+error: immediate must be an integer in the range [0, 16383]
+  --> src/percpu.rs:55:14
+   |
+55 |             "csrwr $r4, estat",  // 清除异常状态
+   |              ^^^^^^^^^^^^^^^^
+   |
+note: instantiated into assembly here
+  --> <inline asm>:2:12
+   |
+2  | csrwr $r4, estat
+   |            ^
+
+error: immediate must be an integer in the range [0, 16383]
+  --> src/percpu.rs:57:14
+   |
+57 |             "csrwr $r4, ticlr",  // 清除定时器中断
+   |              ^^^^^^^^^^^^^^^^
+   |
+note: instantiated into assembly here
+  --> <inline asm>:4:12
+   |
+4  | csrwr $r4, ticlr
+   |            ^
+
+error: immediate must be an integer in the range [0, 16383]
+  --> src/percpu.rs:63:14
+   |
+63 |             "csrwr $r4, prmd"
+   |              ^^^^^^^^^^^^^^^
+   |
+note: instantiated into assembly here
+  --> <inline asm>:2:12
+   |
+2  | csrwr $r4, prmd
+   |            ^
+
+error: immediate must be an integer in the range [0, 16383]
+  --> src/percpu.rs:69:14
+   |
+69 |             "csrwr $r4, ecfg"
+   |              ^^^^^^^^^^^^^^^
+   |
+note: instantiated into assembly here
+  --> <inline asm>:2:12
+   |
+2  | csrwr $r4, ecfg
+   |            ^
+
+For more information about this error, try `rustc --explain E0133`.
+warning: `loongarch_vcpu` (lib) generated 7 warnings
+error: could not compile `loongarch_vcpu` (lib) due to 5 previous errors; 7 warnings emitted

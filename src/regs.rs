@@ -2,7 +2,7 @@
 #[repr(C)]
 pub struct GeneralPurposeRegisters([usize; 32]);
 
-/// Index of risc-v general purpose registers in `GeneralPurposeRegisters`.
+/// Index of loongarch general purpose registers in `GeneralPurposeRegisters`.
 #[allow(missing_docs)]
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -15,8 +15,12 @@ pub enum GprIndex {
     T0,
     T1,
     T2,
-    S0,
-    S1,
+    T3,
+    T4,
+    T5,
+    T6,
+    T7,
+    T8,
     A0,
     A1,
     A2,
@@ -25,6 +29,8 @@ pub enum GprIndex {
     A5,
     A6,
     A7,
+    S0,
+    S1,
     S2,
     S3,
     S4,
@@ -32,13 +38,6 @@ pub enum GprIndex {
     S6,
     S7,
     S8,
-    S9,
-    S10,
-    S11,
-    T3,
-    T4,
-    T5,
-    T6,
 }
 
 impl GprIndex {
@@ -71,13 +70,13 @@ impl GprIndex {
             22 => S6,
             23 => S7,
             24 => S8,
-            25 => S9,
-            26 => S10,
-            27 => S11,
-            28 => T3,
-            29 => T4,
-            30 => T5,
-            31 => T6,
+            25 => T3,
+            26 => T4,
+            27 => T5,
+            28 => T6,
+            29 => T7,
+            30 => T8,
+            31 => Zero, // Not used
             _ => {
                 return None;
             }
@@ -118,11 +117,13 @@ impl GeneralPurposeRegisters {
 #[repr(C)]
 pub struct HypervisorCpuState {
     pub gprs: GeneralPurposeRegisters,
-    pub sstatus: usize,
-    pub hstatus: usize,
-    pub scounteren: usize,
-    pub stvec: usize,
-    pub sscratch: usize,
+    pub crmd: usize,    // Current Mode
+    pub prmd: usize,    // Previous Mode 
+    pub euen: usize,    // Extended Unit Enable
+    pub ecfg: usize,    // Exception Config
+    pub estat: usize,   // Exception Status
+    pub era: usize,     // Exception Return Address
+    pub badv: usize,    // Bad Virtual Address
 }
 
 /// Guest GPR and CSR state which must be saved/restored when exiting/entering virtualization.
@@ -130,37 +131,34 @@ pub struct HypervisorCpuState {
 #[repr(C)]
 pub struct GuestCpuState {
     pub gprs: GeneralPurposeRegisters,
-    pub sstatus: usize,
-    pub hstatus: usize,
-    pub scounteren: usize,
-    pub sepc: usize,
+    pub crmd: usize,
+    pub prmd: usize,
+    pub euen: usize,
+    pub ecfg: usize,
+    pub estat: usize,
+    pub era: usize,
+    pub badv: usize,
 }
 
-/// The CSRs that are only in effect when virtualization is enabled (V=1) and must be saved and
+/// The CSRs that are only in effect when virtualization is enabled and must be saved and
 /// restored whenever we switch between VMs.
 #[derive(Debug, Default, Clone)]
 #[repr(C)]
 pub struct GuestVsCsrs {
-    pub htimedelta: usize,
-    pub vsstatus: usize,
-    pub vsie: usize,
-    pub vstvec: usize,
-    pub vsscratch: usize,
-    pub vsepc: usize,
-    pub vscause: usize,
-    pub vstval: usize,
-    pub vsatp: usize,
-    pub vstimecmp: usize,
+    pub gcfg: usize,    // Guest Config
+    pub gstat: usize,   // Guest Status
+    pub gintc: usize,   // Guest Interrupt Control
+    pub gtlbc: usize,   // Guest TLB Control
+    pub gcntc: usize,   // Guest Counter Control
 }
 
-/// Virtualized HS-level CSRs that are used to emulate (part of) the hypervisor extension for the
-/// guest.
+/// Virtualized host-level CSRs used for guest virtualization
 #[derive(Debug, Default, Clone)]
 #[repr(C)]
 pub struct GuestVirtualHsCsrs {
-    pub hie: usize,
-    pub hgeie: usize,
-    pub hgatp: usize,
+    pub hcfg: usize,    // Hypervisor Config
+    pub hgintc: usize,  // Hypervisor Guest Interrupt Control
+    pub hgatp: usize,   // Hypervisor Guest Address Translation
 }
 
 /// CSRs written on an exit from virtualization that are used by the hypervisor to determine the cause
@@ -168,10 +166,10 @@ pub struct GuestVirtualHsCsrs {
 #[derive(Debug, Default, Clone)]
 #[repr(C)]
 pub struct VmCpuTrapState {
-    pub scause: usize,
-    pub stval: usize,
-    pub htval: usize,
-    pub htinst: usize,
+    pub estat: usize,   // Exception Status
+    pub era: usize,     // Exception Return Address
+    pub badv: usize,    // Bad Virtual Address
+    pub merrera: usize, // Machine Error Record Address
 }
 
 /// (v)CPU register state that must be saved or restored when entering/exiting a VM or switching
