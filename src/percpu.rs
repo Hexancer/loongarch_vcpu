@@ -2,17 +2,16 @@ use core::marker::PhantomData;
 
 use axerrno::{AxError, AxResult};
 use axvcpu::{AxArchPerCpu, AxVCpuHal};
-use riscv::register::{hedeleg, hideleg, hvip, sie};
 
-use crate::consts::traps;
+// use crate::consts::traps;
 use crate::has_hardware_support;
 
-/// Risc-V per-CPU state.
-pub struct RISCVPerCpu<H: AxVCpuHal> {
+/// LoongArch per-CPU state.
+pub struct LoongArchPerCpu<H: AxVCpuHal> {
     _marker: PhantomData<H>,
 }
 
-impl<H: AxVCpuHal> AxArchPerCpu for RISCVPerCpu<H> {
+impl<H: AxVCpuHal> AxArchPerCpu for LoongArchPerCpu<H> {
     fn new(_cpu_id: usize) -> AxResult<Self> {
         unsafe {
             setup_csrs();
@@ -40,42 +39,34 @@ impl<H: AxVCpuHal> AxArchPerCpu for RISCVPerCpu<H> {
     }
 }
 
-/// Initialize (H)S-level CSRs to a reasonable state.
+/// Initialize LoongArch CSRs to a reasonable state.
 unsafe fn setup_csrs() {
     unsafe {
-        // Delegate some synchronous exceptions.
-        hedeleg::Hedeleg::from_bits(
-            traps::exception::INST_ADDR_MISALIGN
-                | traps::exception::BREAKPOINT
-                | traps::exception::ENV_CALL_FROM_U_OR_VU
-                | traps::exception::INST_PAGE_FAULT
-                | traps::exception::LOAD_PAGE_FAULT
-                | traps::exception::STORE_PAGE_FAULT
-                | traps::exception::ILLEGAL_INST,
-        )
-        .write();
+        // 设置异常委托寄存器 (ECFG)
+        core::arch::asm!(
+            "li.w $r4, {ecfg_val}",
+            "csrwr $r4, ecfg",
+            ecfg_val = const (1 << 12) | (1 << 13), // 启用定时器和IPI中断
+        );
 
-        // Delegate all interupts.
-        hideleg::Hideleg::from_bits(
-            traps::interrupt::VIRTUAL_SUPERVISOR_TIMER
-                | traps::interrupt::VIRTUAL_SUPERVISOR_EXTERNAL
-                | traps::interrupt::VIRTUAL_SUPERVISOR_SOFT,
-        )
-        .write();
+        // 清除所有中断状态
+        core::arch::asm!(
+            "li.w $r4, 0",
+            "csrwr $r4, estat",  // 清除异常状态
+            "li.w $r4, 1",
+            "csrwr $r4, ticlr",  // 清除定时器中断
+        );
 
-        // Clear all interrupts.
-        hvip::clear_vssip();
-        hvip::clear_vstip();
-        hvip::clear_vseip();
+        // 设置特权模式 (PRMD)
+        core::arch::asm!(
+            "li.w $r4, 0b11 << 3",  // PLV=3 (guest模式)
+            "csrwr $r4, prmd"
+        );
 
-        // clear all interrupts.
-        // the csr num of hcounteren is 0x606, the riscv repo is error!!!
-        // hcounteren::Hcounteren::from_bits(0xffff_ffff).write();
-        core::arch::asm!("csrw {csr}, {rs}", csr = const 0x606, rs = in(reg) -1);
-
-        // enable interrupt
-        sie::set_sext();
-        sie::set_ssoft();
-        sie::set_stimer();
+        // 启用中断
+        core::arch::asm!(
+            "li.w $r4, 0x800",  // 启用外部中断
+            "csrwr $r4, ecfg"
+        );
     }
 }

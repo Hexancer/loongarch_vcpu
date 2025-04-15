@@ -1,111 +1,85 @@
-use riscv::register::hstatus;
-use riscv::register::{htinst, htval, hvip, scause, sie, sstatus, stval};
-use rustsbi::{Forward, RustSBI};
-use sbi_spec::{hsm, legacy};
-
 use axaddrspace::{GuestPhysAddr, HostPhysAddr, MappingFlags};
 use axerrno::AxResult;
 use axvcpu::{AxVCpuExitReason, AxVCpuHal};
+use core::arch::asm;
+use crate::LoongArchVCpuCreateConfig;
 
 use crate::regs::*;
-use crate::{EID_HVC, RISCVVCpuCreateConfig};
 
-unsafe extern "C" {
-    fn _run_guest(state: *mut VmCpuRegisters);
-}
-
-/// The architecture dependent configuration of a `AxArchVCpu`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct VCpuConfig {}
 
 #[derive(Default)]
-/// A virtual CPU within a guest
-pub struct RISCVVCpu<H: AxVCpuHal> {
+pub struct LoongArchVCpu<H: AxVCpuHal> {
     regs: VmCpuRegisters,
-    sbi: RISCVVCpuSbi,
     _marker: core::marker::PhantomData<H>,
 }
 
-#[derive(RustSBI)]
-struct RISCVVCpuSbi {
-    #[rustsbi(console, pmu, fence, reset, info, hsm)]
-    forward: Forward,
-}
-
-impl Default for RISCVVCpuSbi {
-    #[inline]
-    fn default() -> Self {
-        Self { forward: Forward }
-    }
-}
-
-impl<H: AxVCpuHal> axvcpu::AxArchVCpu for RISCVVCpu<H> {
-    type CreateConfig = RISCVVCpuCreateConfig;
-
+impl<H: AxVCpuHal> axvcpu::AxArchVCpu for LoongArchVCpu<H> {
+    type CreateConfig = LoongArchVCpuCreateConfig;
     type SetupConfig = ();
 
     fn new(config: Self::CreateConfig) -> AxResult<Self> {
         let mut regs = VmCpuRegisters::default();
-        // Setup the guest's general purpose registers.
-        // `a0` is the hartid
+        // 设置通用寄存器：a0 (hartid), a1 (dtb地址)
         regs.guest_regs.gprs.set_reg(GprIndex::A0, config.hart_id);
-        // `a1` is the address of the device tree blob.
-        regs.guest_regs
-            .gprs
-            .set_reg(GprIndex::A1, config.dtb_addr.as_usize());
+        regs.guest_regs.gprs.set_reg(GprIndex::A1, config.dtb_addr.as_usize());
 
         Ok(Self {
-            regs: VmCpuRegisters::default(),
-            sbi: RISCVVCpuSbi::default(),
+            regs,
             _marker: core::marker::PhantomData,
         })
     }
 
     fn setup(&mut self, _config: Self::SetupConfig) -> AxResult {
-        // Set sstatus.
-        let mut sstatus = sstatus::read();
-        sstatus.set_spp(sstatus::SPP::Supervisor);
-        self.regs.guest_regs.sstatus = sstatus.bits();
-
-        // Set hstatus.
-        let mut hstatus = hstatus::read();
-        hstatus.set_spv(true);
-        // Set SPVP bit in order to accessing VS-mode memory from HS-mode.
-        hstatus.set_spvp(true);
+        // 设置 guest 的 CSR 寄存器
         unsafe {
-            hstatus.write();
+            // 设置 PRMD (特权级模式)
+            core::arch::asm!(
+                "li.w $r4, 0b11 << 3",  // PLV=3 (guest模式)
+                "csrwr $r4, prmd"
+            );
+            
+            // 设置 ESTAT (异常状态寄存器)
+            core::arch::asm!(
+                "li.w $r4, 0",  // 清除所有异常状态
+                "csrwr $r4, estat"
+            );
+            
+            // 设置 ECFG (异常配置寄存器)
+            core::arch::asm!(
+                "li.w $r4, (1 << 12) | (1 << 13)",  // 启用定时器和IPI中断
+                "csrwr $r4, ecfg"
+            );
+            
+            // 设置 TICLR (定时器中断清除寄存器)
+            core::arch::asm!(
+                "li.w $r4, 1",  // 清除定时器中断
+                "csrwr $r4, ticlr"
+            );
         }
-        self.regs.guest_regs.hstatus = hstatus.bits();
+        
+        // 初始化其他控制状态
+        self.regs.guest_regs.era = 0;  // 异常返回地址
+        self.regs.virtual_hs_csrs.hgatp = 0;  // 页表基址
+        
         Ok(())
     }
 
     fn set_entry(&mut self, entry: GuestPhysAddr) -> AxResult {
-        self.regs.guest_regs.sepc = entry.as_usize();
+        self.regs.guest_regs.epc = entry.as_usize(); // LoongArch 使用 EPC
         Ok(())
     }
 
     fn set_ept_root(&mut self, ept_root: HostPhysAddr) -> AxResult {
-        self.regs.virtual_hs_csrs.hgatp = 8usize << 60 | usize::from(ept_root) >> 12;
+        self.regs.virtual_hs_csrs.hgatp = ept_root.as_usize();
         Ok(())
     }
 
     fn run(&mut self) -> AxResult<AxVCpuExitReason> {
         unsafe {
-            sstatus::clear_sie();
-            sie::set_sext();
-            sie::set_ssoft();
-            sie::set_stimer();
-        }
-        unsafe {
-            // Safe to run the guest as it only touches memory assigned to it by being owned
-            // by its page table
-            _run_guest(&mut self.regs);
-        }
-        unsafe {
-            sie::clear_sext();
-            sie::clear_ssoft();
-            sie::clear_stimer();
-            sstatus::set_sie();
+            // LoongArch 需要禁用中断等预处理
+            _run_guest_loongarch(&mut self.regs);
         }
         self.vmexit_handler()
     }
@@ -113,10 +87,9 @@ impl<H: AxVCpuHal> axvcpu::AxArchVCpu for RISCVVCpu<H> {
     fn bind(&mut self) -> AxResult {
         unsafe {
             core::arch::asm!(
-                "csrw hgatp, {hgatp}",
-                hgatp = in(reg) self.regs.virtual_hs_csrs.hgatp,
+                "csrwr {0}, hgatp", 
+                in(reg) self.regs.virtual_hs_csrs.hgatp
             );
-            core::arch::riscv64::hfence_gvma_all();
         }
         Ok(())
     }
@@ -125,211 +98,116 @@ impl<H: AxVCpuHal> axvcpu::AxArchVCpu for RISCVVCpu<H> {
         Ok(())
     }
 
-    /// Set one of the vCPU's general purpose register.
     fn set_gpr(&mut self, index: usize, val: usize) {
-        match index {
-            0..=7 => {
-                self.set_gpr_from_gpr_index(GprIndex::from_raw(index as u32 + 10).unwrap(), val);
-            }
-            _ => {
-                warn!(
-                    "RISCVVCpu: Unsupported general purpose register index: {}",
-                    index
-                );
-            }
+        if let Some(idx) = GprIndex::from_raw(index as u32) {
+            self.set_gpr_from_gpr_index(idx, val);
         }
     }
 }
 
-impl<H: AxVCpuHal> RISCVVCpu<H> {
-    /// Gets one of the vCPU's general purpose registers.
+impl<H: AxVCpuHal> LoongArchVCpu<H> {
     pub fn get_gpr(&self, index: GprIndex) -> usize {
         self.regs.guest_regs.gprs.reg(index)
     }
 
-    /// Set one of the vCPU's general purpose register.
     pub fn set_gpr_from_gpr_index(&mut self, index: GprIndex, val: usize) {
         self.regs.guest_regs.gprs.set_reg(index, val);
     }
 
-    /// Advance guest pc by `instr_len` bytes
     pub fn advance_pc(&mut self, instr_len: usize) {
-        self.regs.guest_regs.sepc += instr_len
+        self.regs.guest_regs.epc += instr_len;
     }
 
-    /// Gets the vCPU's registers.
     pub fn regs(&mut self) -> &mut VmCpuRegisters {
         &mut self.regs
     }
-}
 
-impl<H: AxVCpuHal> RISCVVCpu<H> {
     fn vmexit_handler(&mut self) -> AxResult<AxVCpuExitReason> {
-        self.regs.trap_csrs.scause = scause::read().bits();
-        self.regs.trap_csrs.stval = stval::read();
-        self.regs.trap_csrs.htval = htval::read();
-        self.regs.trap_csrs.htinst = htinst::read();
+        let estat = self.regs.trap_csrs.estat;
+        let ecode = (estat >> 16) & 0x3ff;
+        let esubcode = (estat >> 22) & 0x3f;
+        let era = self.regs.guest_regs.era;
 
-        let scause = scause::read();
-        use scause::{Exception, Interrupt, Trap};
-
-        trace!(
-            "vmexit_handler: {:?}, sepc: {:#x}, stval: {:#x}",
-            scause.cause(),
-            self.regs.guest_regs.sepc,
-            self.regs.trap_csrs.stval
-        );
-
-        match scause.cause() {
-            Trap::Exception(Exception::VirtualSupervisorEnvCall) => {
-                let a = self.regs.guest_regs.gprs.a_regs();
-                let param = [a[0], a[1], a[2], a[3], a[4], a[5]];
-                let extension_id = a[7];
-                let function_id = a[6];
-
-                match extension_id {
-                    // Compatibility with Legacy Extensions.
-                    legacy::LEGACY_SET_TIMER..=legacy::LEGACY_SHUTDOWN => match extension_id {
-                        legacy::LEGACY_SET_TIMER => {
-                            // info!("set timer: {}", param[0]);
-                            sbi_rt::set_timer((param[0]) as u64);
-                            unsafe {
-                                // Clear guest timer interrupt
-                                hvip::clear_vstip();
-                            }
-
-                            self.set_gpr_from_gpr_index(GprIndex::A0, 0);
-                        }
-                        legacy::LEGACY_CONSOLE_PUTCHAR => {
-                            sbi_call_legacy_1(legacy::LEGACY_CONSOLE_PUTCHAR, param[0]);
-                        }
-                        legacy::LEGACY_CONSOLE_GETCHAR => {
-                            let c = sbi_call_legacy_0(legacy::LEGACY_CONSOLE_GETCHAR);
-                            self.set_gpr_from_gpr_index(GprIndex::A0, c);
-                        }
-                        legacy::LEGACY_SHUTDOWN => {
-                            // sbi_call_legacy_0(LEGACY_SHUTDOWN)
-                            return Ok(AxVCpuExitReason::SystemDown);
-                        }
-                        _ => {
-                            warn!(
-                                "Unsupported SBI legacy extension id {:#x} function id {:#x}",
-                                extension_id, function_id
-                            );
-                        }
-                    },
-                    // Handle HSM extension
-                    hsm::EID_HSM => match function_id {
-                        hsm::HART_START => {
-                            let hartid = a[0];
-                            let start_addr = a[1];
-                            let opaque = a[2];
-                            self.advance_pc(4);
-                            return Ok(AxVCpuExitReason::CpuUp {
-                                target_cpu: hartid as _,
-                                entry_point: GuestPhysAddr::from(start_addr),
-                                arg: opaque as _,
-                            });
-                        }
-                        hsm::HART_STOP => {
-                            return Ok(AxVCpuExitReason::CpuDown { _state: 0 });
-                        }
-                        hsm::HART_SUSPEND => {
-                            // Todo: support these parameters.
-                            let _suspend_type = a[0];
-                            let _resume_addr = a[1];
-                            let _opaque = a[2];
-                            return Ok(AxVCpuExitReason::Halt);
-                        }
-                        _ => todo!(),
-                    },
-                    // Handle hypercall
-                    EID_HVC => {
-                        self.advance_pc(4);
-                        return Ok(AxVCpuExitReason::Hypercall {
-                            nr: function_id as _,
-                            args: [
-                                param[0] as _,
-                                param[1] as _,
-                                param[2] as _,
-                                param[3] as _,
-                                param[4] as _,
-                                param[5] as _,
-                            ],
-                        });
-                    }
-                    // By default, forward the SBI call to the RustSBI implementation.
-                    // See [`RISCVVCpuSbi`].
-                    _ => {
-                        let ret = self.sbi.handle_ecall(extension_id, function_id, param);
-                        if ret.is_err() {
-                            warn!(
-                                "forward ecall eid {:#x} fid {:#x} param {:#x?} err {:#x} value {:#x}",
-                                extension_id, function_id, param, ret.error, ret.value
-                            );
-                        }
-                        self.set_gpr_from_gpr_index(GprIndex::A0, ret.error);
-                        self.set_gpr_from_gpr_index(GprIndex::A1, ret.value);
-                    }
-                };
-
+        match ecode {
+            // 处理系统调用
+            0x100 => {
                 self.advance_pc(4);
+                Ok(AxVCpuExitReason::Hypercall {
+                    nr: self.regs.guest_regs.gprs.reg(GprIndex::A7) as _,
+                    args: [
+                        self.regs.guest_regs.gprs.reg(GprIndex::A0) as _,
+                        self.regs.guest_regs.gprs.reg(GprIndex::A1) as _,
+                        self.regs.guest_regs.gprs.reg(GprIndex::A2) as _,
+                        self.regs.guest_regs.gprs.reg(GprIndex::A3) as _,
+                        self.regs.guest_regs.gprs.reg(GprIndex::A4) as _,
+                        self.regs.guest_regs.gprs.reg(GprIndex::A5) as _,
+                    ],
+                })
+            }
+            // 处理定时器中断
+            0x400 => {
                 Ok(AxVCpuExitReason::Nothing)
             }
-            Trap::Interrupt(Interrupt::SupervisorTimer) => {
-                // Enable guest timer interrupt
-                unsafe {
-                    hvip::set_vstip();
-                    sie::set_stimer();
-                }
-
-                Ok(AxVCpuExitReason::Nothing)
-            }
-            Trap::Interrupt(Interrupt::SupervisorExternal) => {
-                Ok(AxVCpuExitReason::ExternalInterrupt { vector: 0 })
-            }
-            Trap::Exception(Exception::LoadGuestPageFault)
-            | Trap::Exception(Exception::StoreGuestPageFault) => {
-                let fault_addr = self.regs.trap_csrs.htval << 2 | self.regs.trap_csrs.stval & 0x3;
+            // 处理页错误
+            0x800 => {
+                let badv = self.regs.trap_csrs.badv;
                 Ok(AxVCpuExitReason::NestedPageFault {
-                    addr: GuestPhysAddr::from(fault_addr),
+                    addr: GuestPhysAddr::from(badv),
                     access_flags: MappingFlags::empty(),
                 })
             }
             _ => {
                 panic!(
-                    "Unhandled trap: {:?}, sepc: {:#x}, stval: {:#x}",
-                    scause.cause(),
-                    self.regs.guest_regs.sepc,
-                    self.regs.trap_csrs.stval
+                    "Unhandled trap: ecode={:#x}, esubcode={:#x}, era={:#x}",
+                    ecode, esubcode, era
                 );
             }
         }
     }
 }
 
-#[inline(always)]
-fn sbi_call_legacy_0(eid: usize) -> usize {
-    let error;
-    unsafe {
-        core::arch::asm!(
-            "ecall",
-            in("a7") eid,
-            lateout("a0") error,
-        );
-    }
-    error
+// LoongArch 特有的汇编入口
+unsafe extern "C" fn _run_guest_loongarch(state: *mut VmCpuRegisters) {
+    core::arch::asm!(
+        // 保存 host 状态
+        "csrwr {save3}, {LOONGARCH_CSR_SAVE3}",
+        "csrwr {save4}, {LOONGARCH_CSR_SAVE4}",
+        // 加载 guest 状态
+        "ld.d $r4, {state_ptr}, 0",  // 加载 EPC
+        "csrwr $r4, era",
+        "ld.d $r4, {state_ptr}, 8",  // 加载 hgatp
+        "csrwr $r4, hgatp",
+        // 进入 guest 执行
+        "ertn",
+        // 退出时恢复 host 状态
+        "ld.d $r4, {state_ptr}, 8",  // 恢复 hgatp
+        "csrwr $r4, hgatp",
+        LOONGARCH_CSR_SAVE3 = const 0x33,
+        LOONGARCH_CSR_SAVE4 = const 0x34,
+        save3 = in(reg) (state as usize + core::mem::size_of::<VmCpuRegisters>()),
+        save4 = in(reg) (*state).stack_top,
+        state_ptr = in(reg) state,
+        options(noreturn)
+    );
 }
 
-#[inline(always)]
-fn sbi_call_legacy_1(eid: usize, arg0: usize) -> usize {
-    let error;
-    unsafe {
-        core::arch::asm!(
-            "ecall",
-            in("a7") eid,
-            inlateout("a0") arg0 => error,
-        );
+impl<H: AxVCpuHal> LoongArchVCpu<H> {
+    fn handle_timer_interrupt(&mut self) -> AxResult<AxVCpuExitReason> {
+        // 处理定时器中断
+        unsafe {
+            core::arch::asm!("csrwr $r0, 0x41"); // 清除定时器中断
+        }
+        Ok(AxVCpuExitReason::Nothing)
     }
-    error
+
+    fn handle_ipi(&mut self) -> AxResult<AxVCpuExitReason> {
+        // 处理核间中断
+        Ok(AxVCpuExitReason::Interrupt { vector: 0 })
+    }
+
+    fn flush_tlb(&mut self) {
+        unsafe {
+            asm!("invtlb 0, $r0, $r0"); // 刷新TLB
+        }
+    }
 }

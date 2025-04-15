@@ -1,0 +1,124 @@
+   Compiling loongarch_vcpu v0.1.0 (/home/geng/loongarch_vcpu)
+warning: unused imports: `Trap` and `ecfg::Ecfg`
+ --> src/detect.rs:5:5
+  |
+5 |     ecfg::Ecfg,
+  |     ^^^^^^^^^^
+6 |     estat::{Exception, Estat, Trap},
+  |                               ^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+error[E0609]: no field `era` on type `regs::GuestCpuState`
+  --> src/vcpu.rs:63:30
+   |
+63 |         self.regs.guest_regs.era = 0;  // 异常返回地址
+   |                              ^^^ unknown field
+   |
+   = note: available fields are: `gprs`, `sstatus`, `hstatus`, `scounteren`, `sepc`
+
+error[E0609]: no field `epc` on type `regs::GuestCpuState`
+  --> src/vcpu.rs:70:30
+   |
+70 |         self.regs.guest_regs.epc = entry.as_usize(); // LoongArch 使用 EPC
+   |                              ^^^ unknown field
+   |
+help: a field with a similar name exists
+   |
+70 |         self.regs.guest_regs.sepc = entry.as_usize(); // LoongArch 使用 EPC
+   |                              ~~~~
+
+error[E0609]: no field `epc` on type `regs::GuestCpuState`
+   --> src/vcpu.rs:118:30
+    |
+118 |         self.regs.guest_regs.epc += instr_len;
+    |                              ^^^ unknown field
+    |
+help: a field with a similar name exists
+    |
+118 |         self.regs.guest_regs.sepc += instr_len;
+    |                              ~~~~
+
+error[E0609]: no field `estat` on type `VmCpuTrapState`
+   --> src/vcpu.rs:126:41
+    |
+126 |         let estat = self.regs.trap_csrs.estat;
+    |                                         ^^^^^ unknown field
+    |
+    = note: available fields are: `scause`, `stval`, `htval`, `htinst`
+
+error[E0609]: no field `era` on type `regs::GuestCpuState`
+   --> src/vcpu.rs:129:40
+    |
+129 |         let era = self.regs.guest_regs.era;
+    |                                        ^^^ unknown field
+    |
+    = note: available fields are: `gprs`, `sstatus`, `hstatus`, `scounteren`, `sepc`
+
+error[E0609]: no field `badv` on type `VmCpuTrapState`
+   --> src/vcpu.rs:153:48
+    |
+153 |                 let badv = self.regs.trap_csrs.badv;
+    |                                                ^^^^ unknown field
+    |
+    = note: available fields are: `scause`, `stval`, `htval`, `htinst`
+
+error[E0609]: no field `stack_top` on type `regs::VmCpuRegisters`
+   --> src/vcpu.rs:188:34
+    |
+188 |         save4 = in(reg) (*state).stack_top,
+    |                                  ^^^^^^^^^ unknown field
+    |
+    = note: available fields are: `hyp_regs`, `guest_regs`, `vs_csrs`, `virtual_hs_csrs`, `trap_csrs`
+
+error[E0599]: no variant named `Interrupt` found for enum `AxVCpuExitReason`
+   --> src/vcpu.rs:205:30
+    |
+205 |         Ok(AxVCpuExitReason::Interrupt { vector: 0 })
+    |                              ^^^^^^^^^ variant not found in `AxVCpuExitReason`
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> src/detect.rs:45:5
+   |
+45 | /     asm!(
+46 | |         "move  {}, $tp",
+47 | |         "move  $tp, {}",
+48 | |         out(reg) stored_tp,
+49 | |         in(reg) param,
+50 | |         options(nomem, nostack)
+51 | |     );
+   | |_____^ use of inline assembly
+   |
+   = note: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> src/detect.rs:37:1
+   |
+37 | unsafe fn init_detect_trap(param: usize) -> (bool, Eentry, usize) {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   = note: `#[warn(unsafe_op_in_unsafe_fn)]` on by default
+
+warning[E0133]: use of inline assembly is unsafe and requires unsafe block
+  --> src/detect.rs:60:5
+   |
+60 | /     asm!(
+61 | |         "move  {}, $tp",
+62 | |         "move  $tp, {}",
+63 | |         out(reg) ans,
+64 | |         in(reg) tp,
+65 | |         options(nomem, nostack)
+66 | |     );
+   | |_____^ use of inline assembly
+   |
+   = note: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2024/unsafe-op-in-unsafe-fn.html>
+   = note: inline assembly is entirely unchecked and can cause undefined behavior
+note: an unsafe function restricts its caller, but its body is safe by default
+  --> src/detect.rs:58:1
+   |
+58 | unsafe fn restore_detect_trap(ie: bool, eentry: Eentry, tp: usize) -> usize {
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Some errors have detailed explanations: E0133, E0599, E0609.
+For more information about an error, try `rustc --explain E0133`.
+warning: `loongarch_vcpu` (lib) generated 3 warnings
+error: could not compile `loongarch_vcpu` (lib) due to 8 previous errors; 3 warnings emitted
